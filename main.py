@@ -1,111 +1,128 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
+import requests
 import json
-from datetime import datetime
 import os
+from datetime import datetime
 
-DATA_FILE = 'expenses.json'
+# Используем API, не требующий ключа
+API_URL = "https://er-api.com"
+HISTORY_FILE = "history.json"
 
-class ExpenseTracker:
+class CurrencyConverter:
     def __init__(self, root):
         self.root = root
-        self.root.title("Expense Tracker")
-        self.expenses = self.load_data()
+        self.root.title("💰 Super Currency Converter")
+        self.root.geometry("500x550")
+        self.root.configure(bg="#f0f2f5")
 
-        # Поля ввода
-        frame_input = tk.LabelFrame(root, text="Добавить расход", padx=10, pady=10)
-        frame_input.pack(padx=10, pady=5, fill="x")
+        # Стили
+        style = ttk.Style()
+        style.configure("TButton", font=("Arial", 10, "bold"))
+        
+        # Заголовок
+        tk.Label(root, text="Конвертер валют", font=("Arial", 18, "bold"), bg="#f0f2f5", fg="#333").pack(pady=10)
 
-        tk.Label(frame_input, text="Сумма:").grid(row=0, column=0)
-        self.entry_amount = tk.Entry(frame_input)
-        self.entry_amount.grid(row=0, column=1)
+        # Контейнер ввода
+        input_frame = tk.Frame(root, bg="#f0f2f5")
+        input_frame.pack(pady=10, padx=20, fill="x")
 
-        tk.Label(frame_input, text="Категория:").grid(row=0, column=2)
-        self.combo_category = ttk.Combobox(frame_input, values=["Еда", "Транспорт", "Развлечения", "ЖКХ", "Прочее"])
-        self.combo_category.grid(row=0, column=3)
+        tk.Label(input_frame, text="Сумма:", bg="#f0f2f5").grid(row=0, column=0, sticky="w")
+        self.amount_entry = tk.Entry(input_frame, font=("Arial", 12), width=15)
+        self.amount_entry.grid(row=1, column=0, pady=5, padx=5)
 
-        tk.Label(frame_input, text="Дата (ГГГГ-ММ-ДД):").grid(row=0, column=4)
-        self.entry_date = tk.Entry(frame_input)
-        self.entry_date.insert(0, datetime.now().strftime("%Y-%m-%d"))
-        self.entry_date.grid(row=0, column=5)
+        self.currencies = ["USD", "EUR", "RUB", "GBP", "JPY", "CNY", "KZT"]
+        
+        self.from_box = ttk.Combobox(input_frame, values=self.currencies, width=8, font=("Arial", 11))
+        self.from_box.set("USD")
+        self.from_box.grid(row=1, column=1, padx=5)
 
-        btn_add = tk.Button(frame_input, text="Добавить", command=self.add_expense, bg="green", fg="white")
-        btn_add.grid(row=0, column=6, padx=10)
+        tk.Label(input_frame, text="➔", font=("Arial", 12), bg="#f0f2f5").grid(row=1, column=2)
 
-        # Фильтры
-        frame_filter = tk.LabelFrame(root, text="Фильтрация и Итоги", padx=10, pady=10)
-        frame_filter.pack(padx=10, pady=5, fill="x")
+        self.to_box = ttk.Combobox(input_frame, values=self.currencies, width=8, font=("Arial", 11))
+        self.to_box.set("RUB")
+        self.to_box.grid(row=1, column=3, padx=5)
 
-        tk.Label(frame_filter, text="Категория:").grid(row=0, column=0)
-        self.filter_cat = ttk.Combobox(frame_filter, values=["Все"] + ["Еда", "Транспорт", "Развлечения", "ЖКХ", "Прочее"])
-        self.filter_cat.current(0)
-        self.filter_cat.grid(row=0, column=1)
+        # Кнопка
+        self.convert_btn = tk.Button(root, text="КОНВЕРТИРОВАТЬ", command=self.convert, 
+                                   bg="#007bff", fg="white", font=("Arial", 11, "bold"), 
+                                   padx=20, pady=10, relief="flat", cursor="hand2")
+        self.convert_btn.pack(pady=15)
 
-        btn_filter = tk.Button(frame_filter, text="Применить фильтр", command=self.update_table)
-        btn_filter.grid(row=0, column=2, padx=5)
+        # Таблица истории
+        tk.Label(root, text="История операций:", bg="#f0f2f5", font=("Arial", 10, "italic")).pack()
+        
+        columns = ("date", "from", "to", "result")
+        self.tree = ttk.Treeview(root, columns=columns, show="headings", height=8)
+        self.tree.heading("date", text="Дата")
+        self.tree.heading("from", text="Из")
+        self.tree.heading("to", text="В")
+        self.tree.heading("result", text="Результат")
+        
+        for col in columns:
+            self.tree.column(col, width=100, anchor="center")
+            
+        self.tree.pack(pady=10, padx=20, fill="both", expand=True)
 
-        self.label_total = tk.Label(frame_filter, text="Итого: 0", font=('Arial', 10, 'bold'))
-        self.label_total.grid(row=0, column=3, padx=20)
-
-        # Таблица
-        self.tree = ttk.Treeview(root, columns=("Сумма", "Категория", "Дата"), show='headings')
-        self.tree.heading("Сумма", text="Сумма")
-        self.tree.heading("Категория", text="Категория")
-        self.tree.heading("Дата", text="Дата")
-        self.tree.pack(padx=10, pady=10, fill="both", expand=True)
-
+        self.history = self.load_history()
         self.update_table()
 
-    def add_expense(self):
-        amount = self.entry_amount.get()
-        category = self.combo_category.get()
-        date_str = self.entry_date.get()
+    def convert(self):
+        amount = self.amount_entry.get()
+        base = self.from_box.get().upper()
+        target = self.to_box.get().upper()
 
-        # Валидация
         try:
-            amount = float(amount)
-            if amount <= 0: raise ValueError
-            datetime.strptime(date_str, "%Y-%m-%d")
+            val = float(amount)
+            if val <= 0: raise ValueError
         except ValueError:
-            messagebox.showerror("Ошибка", "Проверьте сумму (число > 0) и формат даты (ГГГГ-ММ-ДД)")
+            messagebox.showerror("Ошибка", "Введите нормальное число больше 0")
             return
 
-        if not category:
-            messagebox.showwarning("Внимание", "Выберите категорию")
-            return
+        try:
+            response = requests.get(f"{API_URL}{base}")
+            data = response.json()
+            
+            if data["result"] == "success":
+                rate = data["rates"][target]
+                res = round(val * rate, 2)
+                
+                # Показываем результат
+                final_text = f"{val} {base} = {res} {target}"
+                messagebox.showinfo("Готово!", final_text)
 
-        new_item = {"amount": amount, "category": category, "date": date_str}
-        self.expenses.append(new_item)
-        self.save_data()
-        self.update_table()
-        self.entry_amount.delete(0, tk.END)
+                # Сохраняем
+                entry = {
+                    "date": datetime.now().strftime("%H:%M:%S"),
+                    "from": base,
+                    "to": target,
+                    "res": res
+                }
+                self.history.append(entry)
+                self.save_history()
+                self.update_table()
+            else:
+                messagebox.showerror("Ошибка", "Не удалось получить данные от API")
+        except:
+            messagebox.showerror("Ошибка", "Проблемы с интернетом")
 
-    def load_data(self):
-        if os.path.exists(DATA_FILE):
-            with open(DATA_FILE, 'r', encoding='utf-8') as f:
+    def load_history(self):
+        if os.path.exists(HISTORY_FILE):
+            with open(HISTORY_FILE, "r") as f:
                 return json.load(f)
         return []
 
-    def save_data(self):
-        with open(DATA_FILE, 'w', encoding='utf-8') as f:
-            json.dump(self.expenses, f, indent=4, ensure_ascii=False)
+    def save_history(self):
+        with open(HISTORY_FILE, "w") as f:
+            json.dump(self.history, f, indent=4)
 
     def update_table(self):
-        # Очистка
         for i in self.tree.get_children():
             self.tree.delete(i)
-        
-        cat_filter = self.filter_cat.get()
-        total = 0
-
-        for exp in self.expenses:
-            if cat_filter == "Все" or exp['category'] == cat_filter:
-                self.tree.insert("", "end", values=(exp['amount'], exp['category'], exp['date']))
-                total += exp['amount']
-        
-        self.label_total.config(text=f"Итого: {total:.2f}")
+        for item in reversed(self.history[-10:]): # Показываем последние 10
+            self.tree.insert("", "end", values=(item["date"], item["from"], item["to"], item["res"]))
 
 if __name__ == "__main__":
     root = tk.Tk()
-    app = ExpenseTracker(root)
+    app = CurrencyConverter(root)
     root.mainloop()
